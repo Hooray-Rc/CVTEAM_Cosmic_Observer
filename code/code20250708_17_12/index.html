@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小小宇宙观察家</title>
+    <link rel="stylesheet" href="src/styles/main.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/OrbitControls.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/webxr/VRButton.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="src/xr/xr-setup.js" defer></script>
+</head>
+<body>
+    <div id="three-container"></div>
+    
+    <div class="control-panel">
+        <h1>小小宇宙观察家</h1>
+        <button id="start-btn" class="btn btn-start">开始太阳系之旅</button>
+        <button id="xr-btn" class="btn">进入XR模式</button>
+    </div>
+    
+    <div class="loading">
+        <div class="loader"></div>
+        <p id="loading-text">正在加载太阳系模型...</p>
+    </div>
+    
+    <div class="notification">模型加载完成！</div>
+
+    <script>
+        // 主要变量声明
+        let scene, camera, renderer, controls;
+        let planetObjects = [];
+        let sunLight;
+        let isPaused = false;
+        let timeScale = 1;
+        let isInitialized = false;
+        let clock = new THREE.Clock();
+        let trackedPlanet = null;
+        let followMode = false;
+        let moonOrbitObject = null; // 保存月球轨道对象
+
+        // 行星配置（对数缩放/适度缩放）
+        // 真实半径（单位：km）
+        const realRadius = {
+            "太阳": 696340,
+            "水星": 2439.7,
+            "金星": 6051.8,
+            "地球": 6371,
+            "火星": 3389.5,
+            "木星": 69911,
+            "土星": 58232,
+            "天王星": 25362,
+            "海王星": 24622,
+            "月球": 1737.1 // 新增月球真实半径
+        };
+        // 真实轨道半径（单位：百万km，日均距离）
+        const realDistance = {
+            "水星": 57.9,
+            "金星": 108.2,
+            "地球": 149.6,
+            "火星": 227.9,
+            "木星": 778.6,
+            "土星": 1433.5,
+            "天王星": 2872.5,
+            "海王星": 4495.1,
+            "月球": 0.384 // 地月平均距离（百万km）
+        };
+        // 对数缩放因子（可根据视觉效果调整）
+        const sizeScale = 0.1;      // 控制行星/太阳的显示大小
+        const distanceScale = 8.5;  // 控制轨道半径
+        // 对数缩放函数
+        function logScale(val, base = 10) {
+            return Math.log(val) / Math.log(base);
+        }
+        // 行星轨道偏心率（真实数据，近似值）
+        const realEccentricity = {
+            "水星": 0.2056,
+            "金星": 0.0068,
+            "地球": 0.0167,
+            "火星": 0.0934,
+            "木星": 0.0489,
+            "土星": 0.0565,
+            "天王星": 0.0457,
+            "海王星": 0.0113,
+            "月球": 0.0549,
+            "哈雷彗星": 0.967
+        };
+        // 生成配置
+        const planetConfig = {
+            "太阳":   { name: "太阳", distance: 0,  size: logScale(realRadius["太阳"]) * sizeScale, speed: 0, rotationSpeed: 0.001, color: 0xffde21, model: "src/models/sun.glb" },
+            "水星":   { name: "水星", distance: logScale(realDistance["水星"]) * distanceScale,  size: logScale(realRadius["水星"]) * sizeScale, speed: 0.010, rotationSpeed: 0.002, color: 0xb5b5b5, model: "src/models/mercury.glb", eccentricity: realEccentricity["水星"], orbitColor: 0xaaaaaa },
+            "金星":   { name: "金星", distance: logScale(realDistance["金星"]) * distanceScale,  size: logScale(realRadius["金星"]) * sizeScale, speed: 0.006, rotationSpeed: 0.0018, color: 0xeccc9a, model: "src/models/venus.glb", eccentricity: realEccentricity["金星"], orbitColor: 0xffe4b5 },
+            "地球":   { name: "地球", distance: logScale(realDistance["地球"]) * distanceScale,  size: logScale(realRadius["地球"]) * sizeScale, speed: 0.004, rotationSpeed: 0.002, color: 0x3399ff, model: "src/models/earth.glb", eccentricity: realEccentricity["地球"], orbitColor: 0x3399ff },
+            "月球":   { name: "月球", distance: logScale(realDistance["月球"]) * 2.2, size: logScale(realRadius["月球"]) * sizeScale * 0.5, speed: 0.008, rotationSpeed: 0.002, color: 0xcccccc, model: "src/models/moon.glb", parent: "地球", eccentricity: realEccentricity["月球"], orbitColor: 0x888888 },
+            "火星":   { name: "火星", distance: logScale(realDistance["火星"]) * distanceScale,  size: logScale(realRadius["火星"]) * sizeScale, speed: 0.003, rotationSpeed: 0.0017, color: 0xff6633, model: "src/models/mars.glb", eccentricity: realEccentricity["火星"], orbitColor: 0xff6347 },
+            "木星":   { name: "木星", distance: logScale(realDistance["木星"]) * distanceScale,  size: logScale(realRadius["木星"]) * sizeScale, speed: 0.0014, rotationSpeed: 0.0015, color: 0xffcc99, model: "src/models/jupiter.glb", eccentricity: realEccentricity["木星"], orbitColor: 0xf5deb3 },
+            "土星":   { name: "土星", distance: logScale(realDistance["土星"]) * distanceScale,  size: logScale(realRadius["土星"]) * sizeScale, speed: 0.0009, rotationSpeed: 0.0013, color: 0xffe599, model: "src/models/saturn.glb", eccentricity: realEccentricity["土星"], orbitColor: 0xffe599 },
+            "天王星": { name: "天王星", distance: logScale(realDistance["天王星"]) * distanceScale,  size: logScale(realRadius["天王星"]) * sizeScale, speed: 0.0004, rotationSpeed: 0.001, color: 0x99ffff, model: "src/models/uranus.glb", eccentricity: realEccentricity["天王星"], orbitColor: 0x66ffff },
+            "海王星": { name: "海王星", distance: logScale(realDistance["海王星"]) * distanceScale,  size: logScale(realRadius["海王星"]) * sizeScale, speed: 0.0002, rotationSpeed: 0.0009, color: 0x3366ff, model: "src/models/neptune.glb", eccentricity: realEccentricity["海王星"], orbitColor: 0x3366ff },
+            "哈雷彗星": {
+                name: "哈雷彗星",
+                distance: logScale(realDistance["哈雷彗星"] * 149.6) * distanceScale,
+                size: logScale(realRadius["哈雷彗星"]) * sizeScale * 0.7,
+                speed: 0.0007,
+                rotationSpeed: 0.002,
+                color: 0xffffff,
+                model: null,
+                eccentricity: realEccentricity["哈雷彗星"],
+                orbitColor: 0x00ffff
+            }
+        };
+
+        // 初始化函数
+        function init() {
+            if (isInitialized) return;
+            isInitialized = true;
+
+            // 创建场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000); // 纯黑色背景
+            // scene.fog = new THREE.Fog(0x000000, 150, 3000); // 可选：去掉雾效果
+
+            // 创建摄像机
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 10000);
+            camera.position.set(0, 15, 50);
+
+            // 创建渲染器
+            renderer = new THREE.WebGLRenderer({ 
+                antialias: true,
+                alpha: true,
+                powerPreference: "high-performance"
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('three-container').appendChild(renderer.domElement);
+
+            // 添加光源
+            const ambientLight = new THREE.AmbientLight(0x222233, 0.4); // 弱冷色环境光
+            scene.add(ambientLight);
+
+            sunLight = new THREE.PointLight(0xffffff, 1.2, 6000, 1.5); // 柔和的太阳点光源
+            sunLight.position.set(0, 0, 0);
+            sunLight.castShadow = true;
+            sunLight.shadow.mapSize.width = 2048;
+            sunLight.shadow.mapSize.height = 2048;
+            sunLight.shadow.bias = -0.001;
+            scene.add(sunLight);
+
+            // 创建轨道控制器
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 0.1;
+            controls.maxDistance = 5000;
+
+            // 创建太阳和行星
+            createSun();
+            createPlanets();
+            createStars();
+
+            // 开始动画循环
+            animate();
+            document.querySelector('.loading').style.display = 'none';
+            showNotification('太阳系模型加载完成');
+        }
+
+        // 创建太阳
+        function createSun() {
+            const loader = new THREE.GLTFLoader();
+            const textureLoader = new THREE.TextureLoader();
+            const cfg = planetConfig["太阳"];
+            loader.load(cfg.model, gltf => {
+                const sun = gltf.scene;
+                const bbox = new THREE.Box3().setFromObject(sun);
+                const size = new THREE.Vector3();
+                bbox.getSize(size);
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const scale = cfg.size / maxDim;
+                sun.scale.set(scale, scale, scale);
+                sun.position.set(0, 0, 0);
+                sun.name = "太阳";
+                // 贴图材质
+                textureLoader.load('src/models/sun.jpg', texture => {
+                    sun.traverse(child => {
+                        if (child.isMesh) {
+                            child.material = new THREE.MeshBasicMaterial({ map: texture });
+                        }
+                    });
+                });
+                // 添加太阳光晕
+                const glowGeometry = new THREE.SphereGeometry(cfg.size * 1.25, 32, 32);
+                const glowMaterial = new THREE.MeshBasicMaterial({ color: 0xfff7b2, transparent: true, opacity: 0.25 });
+                const glowMesh = new THREE.Mesh(glowGeometry, glowMaterial);
+                glowMesh.position.set(0, 0, 0);
+                sun.add(glowMesh);
+                scene.add(sun);
+                planetObjects.push({ mesh: sun, config: cfg, angle: 0 });
+            });
+        }
+
+        let moonObject = null;
+        let moonAngle = Math.random() * Math.PI * 2;
+
+        // 创建行星
+        function createPlanets() {
+            const loader = new THREE.GLTFLoader();
+            Object.keys(planetConfig).forEach(key => {
+                if (key === "太阳" || key === "月球" || key === "哈雷彗星") return;
+                const cfg = planetConfig[key];
+                loader.load(cfg.model, gltf => {
+                    const mesh = gltf.scene;
+                    const bbox = new THREE.Box3().setFromObject(mesh);
+                    const size = new THREE.Vector3();
+                    bbox.getSize(size);
+                    const maxDim = Math.max(size.x, size.y, size.z);
+                    const scale = cfg.size / maxDim;
+                    mesh.scale.set(scale, scale, scale);
+                    mesh.position.set(cfg.distance, 0, 0);
+                    mesh.name = cfg.name;
+                    // 行星表面有明暗对比，支持阴影
+                    mesh.traverse(child => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                            if (child.material && child.material.isMeshStandardMaterial) {
+                                child.material.metalness = 0.2;
+                                child.material.roughness = 0.7;
+                            }
+                        }
+                    });
+                    scene.add(mesh);
+                    planetObjects.push({ mesh, config: cfg, angle: Math.random() * Math.PI * 2 });
+
+                    // 创建椭圆轨道
+                    const a = cfg.distance;
+                    const e = cfg.eccentricity || 0;
+                    const b = a * Math.sqrt(1 - e * e);
+                    const segments = 128;
+                    const ellipsePoints = [];
+                    for (let i = 0; i <= segments; i++) {
+                        const theta = (i / segments) * Math.PI * 2;
+                        const x = a * Math.cos(theta) - a * e;
+                        const z = b * Math.sin(theta);
+                        ellipsePoints.push(new THREE.Vector3(x, 0, z));
+                    }
+                    const orbitGeo = new THREE.BufferGeometry().setFromPoints(ellipsePoints);
+                    const orbitMat = new THREE.LineBasicMaterial({ color: cfg.orbitColor || 0xffffff, transparent: true, opacity: 0.5 });
+                    const orbit = new THREE.Line(orbitGeo, orbitMat);
+                    // 不再旋转，保持在XZ平面
+                    scene.add(orbit);
+
+                    // 如果是地球，加载月球
+                    if (key === "地球") {
+                        const moonCfg = planetConfig["月球"];
+                        loader.load(moonCfg.model, gltfMoon => {
+                            moonObject = gltfMoon.scene;
+                            const bboxMoon = new THREE.Box3().setFromObject(moonObject);
+                            const sizeMoon = new THREE.Vector3();
+                            bboxMoon.getSize(sizeMoon);
+                            const maxDimMoon = Math.max(sizeMoon.x, sizeMoon.y, sizeMoon.z);
+                            const scaleMoon = moonCfg.size / maxDimMoon;
+                            moonObject.scale.set(scaleMoon, scaleMoon, scaleMoon);
+                            moonObject.position.set(cfg.distance + moonCfg.distance, 0, 0);
+                            moonObject.name = "月球";
+                            moonObject.traverse(child => {
+                                if (child.isMesh) {
+                                    child.castShadow = true;
+                                    child.receiveShadow = true;
+                                    if (child.material && child.material.isMeshStandardMaterial) {
+                                        child.material.metalness = 0.2;
+                                        child.material.roughness = 0.7;
+                                    }
+                                }
+                            });
+                            scene.add(moonObject);
+
+                            // 月球轨道也放大
+                            const moonOrbitGeo = new THREE.RingGeometry(moonCfg.distance - 0.03, moonCfg.distance + 0.03, 64);
+                            const moonOrbitMat = new THREE.MeshBasicMaterial({ color: moonCfg.orbitColor || 0x888888, side: THREE.DoubleSide, transparent: true, opacity: 0.4 });
+                            moonOrbitObject = new THREE.Mesh(moonOrbitGeo, moonOrbitMat);
+                            moonOrbitObject.position.set(cfg.distance, 0, 0);
+                            scene.add(moonOrbitObject);
+                        });
+                    }
+                });
+            });
+        }
+
+        // 创建星空
+        function createStars() {
+            const starGeo = new THREE.BufferGeometry();
+            const starCount = 1000;
+            const positions = [];
+            for (let i = 0; i < starCount; i++) {
+                const r = 100 + Math.random() * 900;
+                const theta = Math.random() * 2 * Math.PI;
+                const phi = Math.acos(2 * Math.random() - 1);
+                positions.push(
+                    r * Math.sin(phi) * Math.cos(theta),
+                    r * Math.sin(phi) * Math.sin(theta),
+                    r * Math.cos(phi)
+                );
+            }
+            starGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.8 });
+            const stars = new THREE.Points(starGeo, starMat);
+            scene.add(stars);
+        }
+
+        // 动画循环
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta() * timeScale;
+            planetObjects.forEach(obj => {
+                if (obj.config.distance > 0) {
+                    // 椭圆轨道公转
+                    obj.angle += obj.config.speed * delta * 60;
+                    const a = obj.config.distance;
+                    const e = obj.config.eccentricity || 0;
+                    const b = a * Math.sqrt(1 - e * e);
+                    const x = a * Math.cos(obj.angle) - a * e;
+                    const z = b * Math.sin(obj.angle);
+                    obj.mesh.position.set(x, 0, z);
+                }
+                // 行星自转
+                obj.mesh.rotation.y += obj.config.rotationSpeed * delta * 60;
+            });
+
+            // 月球绕地球转
+            if (moonObject && planetObjects.length > 0) {
+                // 找到地球
+                const earthObj = planetObjects.find(obj => obj.config.name === "地球");
+                const moonCfg = planetConfig["月球"];
+                if (earthObj) {
+                    moonAngle += moonCfg.speed * delta * 60;
+                    const mx = Math.cos(moonAngle) * moonCfg.distance;
+                    const mz = Math.sin(moonAngle) * moonCfg.distance;
+                    // 月球位置 = 地球位置 + 月球轨道偏移
+                    moonObject.position.set(
+                        earthObj.mesh.position.x + mx,
+                        earthObj.mesh.position.y,
+                        earthObj.mesh.position.z + mz
+                    );
+                    moonObject.rotation.y += moonCfg.rotationSpeed * delta * 60;
+                    // 月球轨道环实时跟随地球
+                    if (moonOrbitObject) {
+                        moonOrbitObject.position.set(
+                            earthObj.mesh.position.x,
+                            earthObj.mesh.position.y,
+                            earthObj.mesh.position.z
+                        );
+                    }
+                }
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // 显示通知
+        function showNotification(message) {
+            const notification = document.querySelector('.notification');
+            notification.textContent = message;
+            notification.classList.add('show');
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 3000);
+        }
+
+        // 页面加载时初始化
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

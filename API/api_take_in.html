@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>AI 聊天助手（带上下文 & Enter 发送）</title>
+  <style>
+    body { font-family: sans-serif; max-width: 700px; margin: auto; padding: 20px; }
+    #chat { border: 1px solid #ccc; padding: 10px; height: 400px; overflow-y: auto; margin-bottom: 10px; }
+    #inputArea { display: flex; gap: 10px; }
+    input { flex: 1; padding: 8px; font-size: 16px; }
+    button { padding: 8px 16px; font-size: 16px; }
+  </style>
+</head>
+<body>
+
+<h2>AI 聊天（识别当前页面，Enter 发送）</h2>
+<div id="chat"></div>
+<div id="inputArea">
+  <input id="userInput" type="text" placeholder="请输入你的问题，按 Enter 发送..." />
+  <button onclick="send()">发送</button>
+</div>
+
+<script>
+const API_KEY = "MY_KEY";  // PI Key
+const API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+
+// 获取当前页面信息做上下文
+const pageContext = `
+这是当前页面内容摘要：
+标题：${document.title}
+URL：${window.location.href}
+正文内容摘录：${document.body.innerText.slice(0, 300)} ...
+`;
+
+let history = [
+  { role: "system", content: pageContext }
+];
+
+async function send() {
+  const input = document.getElementById("userInput");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+
+  const chat = document.getElementById("chat");
+  chat.innerHTML += `<p><b>你：</b>${text}</p>`;
+  history.push({ role: "user", content: text });
+
+  try {
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + API_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "chatglm_turbo",
+        messages: history
+      })
+    });
+
+    const data = await res.json();
+    const reply = data?.choices?.[0]?.message?.content || "AI 没有回答";
+    history.push({ role: "assistant", content: reply });
+    chat.innerHTML += `<p><b>AI：</b>${reply}</p>`;
+    chat.scrollTop = chat.scrollHeight;
+  } catch (err) {
+    chat.innerHTML += `<p><b>AI：</b> 请求失败</p>`;
+    console.error(err);
+  }
+}
+
+// 监听回车键（Enter）发送
+document.getElementById("userInput").addEventListener("keydown", function(event) {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    send();
+  }
+});
+</script>
+
+</body>
+</html>
